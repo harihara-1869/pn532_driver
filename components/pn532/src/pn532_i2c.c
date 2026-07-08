@@ -365,6 +365,17 @@ esp_err_t pn532_i2c_create(const pn532_i2c_config_t *cfg,
         goto fail;
     }
 
+    /* Probe the bus to verify the PN532 is present and to initialise the
+     * bus state machine (the first transmit after add_device can fail with
+     * ESP_ERR_INVALID_STATE without a preceding probe). */
+    err = i2c_master_probe(c->bus, PN532_I2C_ADDRESS, PN532_XFER_TIMEOUT_MS);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "PN532 not found on I2C bus at 0x%02x: %s",
+                 PN532_I2C_ADDRESS, esp_err_to_name(err));
+        goto fail;
+    }
+    ESP_LOGI(TAG, "PN532 detected on I2C bus at 0x%02x", PN532_I2C_ADDRESS);
+
     /* --- Optional IRQ line --- */
     if (c->irq_mode) {
         err = setup_irq(c);
