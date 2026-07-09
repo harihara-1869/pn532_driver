@@ -91,19 +91,14 @@ esp_err_t pn532_sam_configuration(pn532_handle_t h,
         return ESP_ERR_INVALID_ARG;
     }
 
+    /* Parameters are positional: [Mode, Timeout, IRQ]. All three are always
+     * sent — the Timeout byte is only *meaningful* in Virtual Card mode but is
+     * still present on the wire, so the IRQ byte keeps its slot (byte 3). */
     uint8_t params[3];
-    size_t params_len = 1;
     params[0] = (uint8_t)mode;
-
-    if (mode == PN532_SAM_VIRTUAL_CARD) {
-        params[1] = timeout_50ms;
-        params[2] = irq_enabled ? 0x01 : 0x00;
-        params_len = 3;
-    } else {
-        /* Timeout byte is NOT included for non-VIRTUAL_CARD modes. */
-        params[1] = irq_enabled ? 0x01 : 0x00;
-        params_len = 2;
-    }
+    params[1] = timeout_50ms;
+    params[2] = irq_enabled ? 0x01 : 0x00;
+    const size_t params_len = 3;
 
     esp_err_t err = pn532_send_command(h, PN532_CMD_SAM_CONFIGURATION,
                                        params, params_len);
@@ -247,8 +242,13 @@ esp_err_t pn532_tg_init_as_target(pn532_handle_t h,
 
     /* This command blocks until an external initiator activates us.
      * The PN532 enters power-down waiting for RF; IRQ asserts on activation.
-     * Use the caller-supplied timeout. */
-    uint8_t rsp[2];
+     * Use the caller-supplied timeout.
+     *
+     * The response carries the initiator's first command after the Mode byte,
+     * so the buffer must be large enough to hold it — a 2-byte buffer would
+     * make pn532_receive_response() fail with ESP_ERR_INVALID_SIZE as soon as
+     * any initiator data is appended. */
+    uint8_t rsp[2 + PN532_TG_MAX_DATA_LEN];
     size_t rsp_len = 0;
     err = pn532_receive_response(h, rsp, sizeof(rsp), &rsp_len, timeout_ms);
     if (err != ESP_OK) {
@@ -259,21 +259,19 @@ esp_err_t pn532_tg_init_as_target(pn532_handle_t h,
         return err;
     }
 
-    /* Response: D5 8D Status Mode [Tg] [InitiatorCommand[]]
-     * Minimum: status(1) + mode(1) = 2 bytes. */
+    /* Response: D5 8D Mode [InitiatorCommand...]  → buf = {0x8D, Mode, ...}.
+     * NOTE: there is NO status byte here (unlike most other commands). The byte
+     * right after the response code is the Mode byte, which encodes how the
+     * PN532 was activated (baud rate, DEP vs ISO14443-4 PICC, active/passive).
+     * A non-zero Mode is normal, not an error.
+     * Minimum valid response: cmd(1) + mode(1) = 2 bytes. */
     if (rsp_len < 2 || rsp[0] != PN532_RSP_TG_INIT_AS_TARGET) {
         ESP_LOGE(TAG, "TgInitAsTarget: unexpected response cmd 0x%02x",
                  rsp_len > 0 ? rsp[0] : 0);
         return ESP_FAIL;
     }
 
-    const uint8_t status = rsp[1];
-    if (status != PN532_ERR_NONE) {
-        ESP_LOGE(TAG, "TgInitAsTarget: PN532 error 0x%02x", status);
-        return ESP_FAIL;
-    }
-
-    result->mode = (rsp_len >= 3) ? rsp[2] : 0;
+    result->mode = rsp[1];
     ESP_LOGI(TAG, "TgInitAsTarget: activated, mode=0x%02x", result->mode);
     return ESP_OK;
 }
@@ -338,7 +336,14 @@ esp_err_t pn532_tg_get_data(pn532_handle_t h,
             return ESP_FAIL;
         }
 
-        /* Determine data offset: skip status byte and optional NAD byte. */
+        /* Determine data offset: skip status byte and optional NAD byte.
+         *
+         * Confirmed correct per UM0701-02 §7.1: bit 7 of the status byte
+         * (NADPresent) is only set when NAD usage has actually been negotiated
+         * via SetParameters (fNADUsed, §7.2.9). When NAD is not enabled — the
+         * usual case, and the default for this driver — the bit stays 0 and the
+         * skip path is never taken, so no real data byte is ever dropped. When
+         * NAD *is* enabled, the extra byte is the NAD and must be skipped. */
         size_t data_offset = 2;  /* past cmd byte and status byte */
         if (status & PN532_TG_STATUS_NAD_BIT) {
             data_offset += 1;  /* skip NAD byte */
