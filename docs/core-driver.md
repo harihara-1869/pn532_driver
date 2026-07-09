@@ -176,6 +176,48 @@ Does **not** read the response — that's a separate call.
 2. Wait 2ms for oscillator stabilisation (T_osc_start worst case)
 3. Returns the write error (but logs a warning rather than failing — chip may wake even on NACK)
 
+### `pn532_reset`
+
+Asserts hardware reset on the PN532 while holding the bus mutex to prevent I2C transactions during reset.
+
+1. Check that transport provides `reset_device` callback — return `ESP_ERR_NOT_SUPPORTED` if not
+2. Acquire bus mutex via `bus_lock` callback (5-second timeout)
+3. Call `reset_device(ctx, pulse_ms, settle_ms)` — drives RST LOW for pulse_ms, then HIGH, waits settle_ms
+4. Release bus mutex via `bus_unlock` callback
+
+**Typical values**: pulse_ms = 10, settle_ms = 100
+
+**Returns**:
+- `ESP_OK` — reset asserted successfully
+- `ESP_ERR_INVALID_ARG` — NULL handle
+- `ESP_ERR_NOT_SUPPORTED` — transport has no reset pin
+
+**Note**: the caller is responsible for re-running SAMConfiguration after reset.
+
+## Frame Resync (`resync_frame`)
+
+When `pn532_parse_frame` returns `ESP_ERR_INVALID_CRC`, the core driver attempts a frame resync before giving up.
+
+**Purpose**: drain and discard incoming bytes from the PN532 until a valid preamble sequence is found (0x00 0x00 0xFF), or until timeout elapses.
+
+**Algorithm**:
+
+1. Maintain a 3-byte sliding window
+2. Read one byte at a time using `tp_read_frame` (single-byte over-reads)
+3. When the window matches `{0x00, 0x00, 0xFF}` return ESP_OK
+4. Hard cap: 512 bytes maximum. If consumed with no preamble found, return ESP_FAIL
+5. If timeout elapses first, return ESP_ERR_TIMEOUT
+
+**Integration with `pn532_receive_response`**:
+
+1. `pn532_parse_frame()` returns `ESP_ERR_INVALID_CRC`
+2. Log at WARN: "checksum mismatch — attempting frame resync"
+3. Call `resync_frame(h, timeout_ms)`
+4. If resync succeeds (ESP_OK): retry the receive exactly once
+5. If resync fails or retry still fails: return original `ESP_ERR_INVALID_CRC`
+
+**Note**: resync is only called on CRC errors, not on ESP_ERR_TIMEOUT.
+
 ## Handle Structure
 
 ```c

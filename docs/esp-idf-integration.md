@@ -80,14 +80,16 @@ i2c_device_config_t dev_cfg = {
 
 ### GPIO (`driver/gpio.h`)
 
-Used for the optional IRQ pin (P70_IRQ, active-low).
+Used for the optional IRQ pin (P70_IRQ, active-low), optional RST pin, and I2C bus recovery.
 
 | API | Where | Purpose |
 |-----|-------|---------|
-| `gpio_config()` | `setup_irq` | Configure IRQ pin as input, pull-up, falling-edge interrupt |
+| `gpio_config()` | `setup_irq`, reset pin setup | Configure GPIO pin mode, pull-up/down, interrupt type |
 | `gpio_install_isr_service()` | `setup_irq` | Install GPIO ISR service (process-global, tolerates already installed) |
 | `gpio_isr_handler_add()` | `setup_irq` | Attach ISR to IRQ pin |
-| `gpio_get_level()` | `wait_ready_irq` | Pre/post check IRQ level without waiting |
+| `gpio_get_level()` | `wait_ready_irq`, `recover_i2c_bus` | Read GPIO level (IRQ pre-check, SDA stuck detection) |
+| `gpio_set_level()` | `pn532_i2c_reset_device`, `recover_i2c_bus` | Drive GPIO HIGH/LOW (reset pulse, SCL bit-bang) |
+| `gpio_set_direction()` | `recover_i2c_bus` | Temporarily reconfigure GPIO mode for bus recovery |
 | `gpio_isr_handler_remove()` | `pn532_i2c_destroy` | Detach ISR during cleanup |
 
 #### IRQ GPIO Configuration
@@ -114,6 +116,16 @@ gpio_config_t io = {
 | `xSemaphoreCreateBinary()` | `setup_irq` | IRQ signalling — starts empty, given by ISR on falling edge |
 | `xSemaphoreGiveFromISR()` | `pn532_irq_isr` | Give IRQ semaphore from interrupt context |
 | `vSemaphoreDelete()` | `pn532_i2c_destroy` | Clean up semaphores |
+
+### ROM Delays (`esp_rom_sys.h`)
+
+Used for precise microsecond delays during I2C bus recovery bit-banging.
+
+| API | Where | Purpose |
+|-----|-------|---------|
+| `esp_rom_delay_us()` | `recover_i2c_bus` | 50µs half-periods for SCL pulses during bus recovery |
+
+This function is available on all ESP32 targets, has no FreeRTOS dependency, and is safe in any context (ISR or task).
 
 #### Task Management (`freertos/task.h`)
 

@@ -134,6 +134,61 @@ Sends data from the PN532 to the NFC initiator.
 - Max 262 bytes per exchange (`PN532_TG_MAX_DATA_LEN`)
 - Response: `{0x8F, status}` — status byte only
 
+## Secondary Commands
+
+### InListPassiveTarget (0x4A)
+
+Discovers passive NFC targets in the RF field. Supports multiple modulation types.
+
+**Parameter bytes**: `{MaxTg, BrTy, [InitiatorData...]}`
+
+| Field | Size | Description |
+|-------|------|-------------|
+| MaxTg | 1 | Maximum targets to detect (1 or 2) |
+| BrTy | 1 | Bit rate / modulation type (`pn532_brty_t`) |
+| InitiatorData | 0-N | Optional extra data (e.g. SENSB_REQ for Type B) |
+
+**Supported modulation types** (`pn532_brty_t`):
+
+| Value | Type |
+|-------|------|
+| 0x00 | ISO/IEC 14443-A @ 106 kbps |
+| 0x01 | FeliCa @ 212 kbps |
+| 0x02 | FeliCa @ 424 kbps |
+| 0x03 | ISO/IEC 14443-B @ 106 kbps |
+| 0x04 | Jewel @ 106 kbps |
+
+**Response format** (Type A): `{0x4B, NbTg, [Tg, ATQA[2], SAK, NFCIDLen, NFCID[n], [AtsLen, ATS[m]]]}`
+
+- NbTg = 0 means no targets found (not an error — returns ESP_OK with `*num_targets_out = 0`)
+- For Type A: ATQA (2 bytes) + SAK (1 byte) + NFCID (variable) + optional ATS (if SAK bit 5 set)
+- ATS is present when the target supports ISO14443-4 (SAK & 0x20)
+
+### TgGetInitiatorCommand (0x88)
+
+Retrieves the raw command from the NFC initiator in ISO14443-4 PICC emulation mode.
+
+**Response format**: `{0x89, status, [DataIn...]}`
+
+- `status`: PN532 error code (0x00 = success)
+- `DataIn`: 0 to 262 bytes of initiator data
+
+### TgResponseToInitiator (0x90)
+
+Sends a response to the initiator in ISO14443-4 PICC emulation mode. This is an alternative to TgSetData for the initial response after RATS.
+
+**Parameter bytes**: `{DataOut...}` (0 to 262 bytes)
+
+**Response format**: `{0x91, status}` — status byte only
+
+### TgSetMetaData (0x94)
+
+Sets meta-data to be appended to the next TgResponseToInitiator or TgSetData payload.
+
+**Parameter bytes**: `{DataOut...}` (0 to 262 bytes)
+
+**Response format**: `{0x95, status}` — status byte only
+
 ## Typical Usage: Card Emulation Loop
 
 ```c

@@ -79,6 +79,32 @@ typedef struct {
 } pn532_tg_init_result_t;
 ```
 
+#### `pn532_brty_t`
+
+```c
+typedef enum {
+    PN532_BRTY_106A  = 0x00,  // ISO/IEC 14443-A @ 106 kbps
+    PN532_BRTY_212F  = 0x01,  // FeliCa @ 212 kbps
+    PN532_BRTY_424F  = 0x02,  // FeliCa @ 424 kbps
+    PN532_BRTY_106B  = 0x03,  // ISO/IEC 14443-B @ 106 kbps
+    PN532_BRTY_JEWEL = 0x04,  // Jewel @ 106 kbps
+} pn532_brty_t;
+```
+
+#### `pn532_passive_target_t`
+
+```c
+typedef struct {
+    uint8_t tg;          // Target number assigned by PN532 (1-based)
+    uint8_t atqa[2];     // ATQA (Type A only, little-endian)
+    uint8_t sak;         // SAK (Type A only)
+    uint8_t nfcid_len;   // Length of NFCID / UID
+    uint8_t nfcid[10];   // NFCID / UID bytes (up to 10 for triple-size)
+    uint8_t ats_len;     // ATS length (0 if not ISO14443-4)
+    uint8_t ats[256];    // ATS response bytes
+} pn532_passive_target_t;
+```
+
 ### Constants
 
 #### SetParameters flags
@@ -199,6 +225,79 @@ Send data to NFC initiator. Max 262 bytes.
 | `ESP_ERR_INVALID_SIZE` | data_len > 262 |
 | `ESP_FAIL` | PN532 error status |
 
+#### `pn532_in_list_passive_target`
+
+```c
+esp_err_t pn532_in_list_passive_target(pn532_handle_t h,
+                                       uint8_t max_targets,
+                                       pn532_brty_t brty,
+                                       const uint8_t *initiator_data,
+                                       size_t initiator_data_len,
+                                       pn532_passive_target_t *targets_out,
+                                       uint8_t *num_targets_out,
+                                       uint32_t timeout_ms);
+```
+
+Discover passive NFC targets in the RF field. NbTg=0 means no targets found (not an error).
+
+| Return | Condition |
+|--------|-----------|
+| `ESP_OK` | Success (check `*num_targets_out`) |
+| `ESP_ERR_INVALID_ARG` | NULL args or max_targets not 1 or 2 |
+| `ESP_FAIL` | PN532 error or truncated response |
+
+#### `pn532_tg_get_initiator_command`
+
+```c
+esp_err_t pn532_tg_get_initiator_command(pn532_handle_t h,
+                                         uint8_t *buf, size_t buf_size,
+                                         size_t *out_len,
+                                         uint32_t timeout_ms);
+```
+
+Retrieve raw command from NFC initiator in ISO14443-4 PICC emulation.
+
+| Return | Condition |
+|--------|-----------|
+| `ESP_OK` | Command received |
+| `ESP_ERR_INVALID_ARG` | NULL args |
+| `ESP_ERR_INVALID_SIZE` | Data too large for buffer |
+| `ESP_FAIL` | PN532 error status |
+
+#### `pn532_tg_response_to_initiator`
+
+```c
+esp_err_t pn532_tg_response_to_initiator(pn532_handle_t h,
+                                         const uint8_t *data, size_t data_len,
+                                         uint32_t timeout_ms);
+```
+
+Send response to initiator in ISO14443-4 PICC emulation. Max 262 bytes.
+
+| Return | Condition |
+|--------|-----------|
+| `ESP_OK` | Response sent |
+| `ESP_ERR_INVALID_ARG` | NULL handle, or NULL data with non-zero len |
+| `ESP_ERR_INVALID_SIZE` | data_len > 262 |
+| `ESP_FAIL` | PN532 error status |
+
+#### `pn532_tg_set_meta_data`
+
+```c
+esp_err_t pn532_tg_set_meta_data(pn532_handle_t h,
+                                 const uint8_t *data, size_t data_len,
+                                 uint32_t timeout_ms);
+```
+
+Set meta-data to append to next TgResponseToInitiator/TgSetData payload. Max 262 bytes.
+
+| Return | Condition |
+|--------|-----------|
+| `ESP_OK` | Meta-data set |
+| `ESP_ERR_INVALID_ARG` | NULL handle, or NULL data with non-zero len |
+| `ESP_ERR_INVALID_SIZE` | data_len > 262 |
+| `ESP_FAIL` | PN532 error status |
+
 ---
 
 ## Core Driver (`pn532.h`)
@@ -222,6 +321,9 @@ typedef struct {
     esp_err_t (*read_frame)(void *ctx, uint8_t *buf, size_t len);
     esp_err_t (*wait_ready)(void *ctx, uint32_t timeout_ms);
     void      (*destroy)(void *ctx);
+    esp_err_t (*reset_device)(void *ctx, uint32_t pulse_ms, uint32_t settle_ms);
+    esp_err_t (*bus_lock)(void *ctx, uint32_t timeout_ms);
+    void      (*bus_unlock)(void *ctx);
 } pn532_transport_ops_t;
 ```
 
@@ -234,6 +336,11 @@ Transport abstraction vtable. All callbacks receive the transport-private `ctx` 
 | `read_frame` | Read status + frame in one transaction | `pn532_read_ack`, `pn532_receive_response` |
 | `wait_ready` | Block until chip has data ready | Before every frame read |
 | `destroy` | Release all transport resources | `pn532_deinit` |
+| `reset_device` | Assert hardware reset (optional) | `pn532_reset` |
+| `bus_lock` | Acquire bus mutex (optional) | `pn532_reset` |
+| `bus_unlock` | Release bus mutex (optional) | `pn532_reset` |
+
+The last three callbacks are optional (NULL-safe). They are used by `pn532_reset` to bracket a hardware reset with bus mutex acquisition.
 
 #### `pn532_config_t`
 
@@ -329,6 +436,20 @@ Wake the PN532 from Power-Down / LowVbat. Sends 6 bytes of 0x55, waits 2ms for o
 | `ESP_ERR_INVALID_ARG` | NULL handle |
 | `ESP_ERR_TIMEOUT` | Bus error (chip may still have woken) |
 
+#### `pn532_reset`
+
+```c
+esp_err_t pn532_reset(pn532_handle_t h, uint32_t pulse_ms, uint32_t settle_ms);
+```
+
+Assert hardware reset on the PN532. Acquires the bus mutex before asserting reset and releases it after settle_ms completes. Typical values: pulse_ms = 10, settle_ms = 100.
+
+| Return | Condition |
+|--------|-----------|
+| `ESP_OK` | Reset asserted successfully |
+| `ESP_ERR_INVALID_ARG` | NULL handle |
+| `ESP_ERR_NOT_SUPPORTED` | Transport has no reset pin |
+
 ---
 
 ## I2C Transport (`pn532_i2c.h`)
@@ -342,6 +463,7 @@ typedef struct {
     int        sda_gpio;   // SDA GPIO (required)
     int        scl_gpio;   // SCL GPIO (required)
     int        irq_gpio;   // IRQ GPIO; -1 = polling mode
+    int        rst_gpio;   // RST GPIO; -1 = no hardware reset
     i2c_port_t port;       // I2C port (e.g. I2C_NUM_0)
     uint32_t   clk_speed;  // Hz; 0 = 400 kHz default
 } pn532_i2c_config_t;
@@ -381,3 +503,16 @@ void pn532_i2c_destroy(void *ctx);
 ```
 
 Destroy transport. Tears down IRQ ISR, I2C device, I2C bus, mutex. Safe with NULL.
+
+#### `pn532_i2c_reset_device`
+
+```c
+esp_err_t pn532_i2c_reset_device(void *ctx, uint32_t pulse_ms, uint32_t settle_ms);
+```
+
+Assert hardware reset on the PN532. Drives rst_gpio LOW for pulse_ms milliseconds, then HIGH. After releasing reset, waits settle_ms milliseconds for oscillator stabilisation.
+
+| Return | Condition |
+|--------|-----------|
+| `ESP_OK` | Reset asserted |
+| `ESP_ERR_NOT_SUPPORTED` | No rst_gpio configured (rst_gpio = -1) |

@@ -42,7 +42,10 @@ pn532_driver/
 - [x] PN532 frame parser (LCS/DCS validation, error frame detection)
 - [x] Command send + ACK handshake
 - [x] Response receive + NACK retransmit on CRC failure
+- [x] Frame resync on checksum mismatch (drains up to 512 bytes to find preamble)
 - [x] Wakeup sequence
+- [x] Hardware reset support (optional RST GPIO pin)
+- [x] I2C bus recovery (SDA stuck-low detection and SCL clock pulse recovery)
 - [x] Command layer (`pn532_cmd.h`):
   - [x] `pn532_get_firmware_version()` — read IC, version, revision, features
   - [x] `pn532_sam_configuration()` — configure SAM mode (NORMAL, VIRTUAL_CARD, etc.)
@@ -50,17 +53,19 @@ pn532_driver/
   - [x] `pn532_tg_init_as_target()` — card emulation (listen for external RF reader)
   - [x] `pn532_tg_get_data()` — receive data from NFC initiator (MI-bit chaining)
   - [x] `pn532_tg_set_data()` — send data to NFC initiator
+  - [x] `pn532_in_list_passive_target()` — discover passive NFC targets (Type A/B/F)
+  - [x] `pn532_tg_get_initiator_command()` — retrieve raw command from initiator
+  - [x] `pn532_tg_response_to_initiator()` — send response in ISO14443-4 PICC mode
+  - [x] `pn532_tg_set_meta_data()` — set meta-data for next response
 - [x] Command-layer test suite (all commands, on-target)
 
 **TODO:**
 - [ ] Additional command wrappers
-  - [ ] `pn532_in_list_passive_target()` — detect Type A/B cards in field
   - [ ] `pn532_in_data_exchange()` — send/receive data with a detected tag
   - [ ] `pn532_in_select()` — select a detected target by SENS_RES/ATQA
   - [ ] `pn532_in_release()` — release a selected target
   - [ ] `pn532_in_autopoll()` — automatic multi-protocol polling loop
-  - [ ] `pn532_tg_set_meta_data()` / `pn532_tg_get_meta_data()`
-  - [ ] `pn532_tg_response_to_initiator()` / `pn532_tg_get_initiator_command()`
+  - [ ] `pn532_tg_get_meta_data()` — retrieve meta-data from initiator
 - [ ] SPI transport backend
 - [ ] UART transport backend
 - [ ] NFC application layer

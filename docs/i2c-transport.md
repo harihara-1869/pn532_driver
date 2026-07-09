@@ -26,6 +26,9 @@ typedef struct {
     SemaphoreHandle_t       mutex;      // serialises all bus transactions
 
     int  irq_gpio;                      // -1 => polling mode
+    int  rst_gpio;                      // -1 => no hardware reset
+    int  sda_gpio;                      // stored for bus recovery
+    int  scl_gpio;                      // stored for bus recovery
     bool irq_mode;                      // irq_gpio >= 0
     bool isr_added;                     // ISR handler registered (for cleanup)
     SemaphoreHandle_t irq_sem;          // binary sem, given from GPIO ISR
@@ -170,6 +173,77 @@ static void IRAM_ATTR pn532_irq_isr(void *arg) {
 Loops: read status byte → check RDY bit → delay 1ms → repeat. Bounded by both `timeout_ms` and `poll_max_retries` (1000).
 
 **ESP-IDF APIs**: `gpio_get_level()`, `xSemaphoreTake()`, `xSemaphoreGiveFromISR()`
+
+## Hardware Reset (`pn532_i2c_reset_device`)
+
+Asserts hardware reset on the PN532 by driving the RST GPIO pin.
+
+**Sequence**:
+1. Check if `rst_gpio` is configured (-1 means no reset pin) — return `ESP_ERR_NOT_SUPPORTED` if not
+2. Drive RST LOW (`gpio_set_level(rst_gpio, 0)`)
+3. Wait `pulse_ms` milliseconds (typically 10ms)
+4. Drive RST HIGH (`gpio_set_level(rst_gpio, 1)`)
+5. Wait `settle_ms` milliseconds for oscillator stabilisation (typically 100ms)
+
+**Note**: the caller is responsible for re-running SAMConfiguration after reset. When called via `pn532_reset()`, the bus mutex is held during the entire reset sequence.
+
+## I2C Bus Recovery (`recover_i2c_bus`)
+
+Detects and recovers from a stuck I2C bus where the PN532 is holding SDA low (e.g. after a power glitch, partial transaction, or firmware hang).
+
+### Detection
+
+Before attempting recovery, checks if SDA is actually stuck low:
+1. Temporarily reconfigure SDA GPIO as input (no pull)
+2. Read level via `gpio_get_level()`
+3. If SDA is high, restore I2C function and return ESP_OK immediately — bus is not stuck
+
+### Recovery Sequence (NXP AN10609 / IEEE procedure)
+
+If SDA is stuck low:
+
+1. **Configure SCL as output** for bit-banging
+2. **Clock out up to 9 SCL pulses** with 50µs half-periods
+   - Check SDA after each rising edge
+   - Stop early if SDA goes high (device released the bus)
+3. **Issue manual STOP condition**: SCL high, SDA low → SDA high
+4. **Restore both pins** to I2C peripheral function
+
+### Post-Recovery
+
+After successful recovery:
+- **If rst_gpio available**: call `pn532_i2c_reset_device(10, 100)` to reset PN532 firmware to clean state
+- **If no rst_gpio**: send wakeup sequence (0x55 bytes) and log a warning:
+  `"PN532: no reset pin — PN532 internal state may be undefined after recovery"`
+
+### Integration with Write Retry Loop
+
+Bus recovery is called only after the full write retry budget is exhausted:
+
+```
+pn532_i2c_write():
+  for attempt in 1..5:
+    i2c_master_transmit() → if OK, return ESP_OK
+    vTaskDelay(1ms)
+  
+  // All retries exhausted
+  ESP_LOGW("write failed after 5 retries, attempting bus recovery")
+  
+  // Check if SDA is stuck and attempt recovery
+  bus_lock()
+  recover_i2c_bus()
+  bus_unlock()
+  
+  // One final write attempt after recovery
+  bus_lock()
+  err = i2c_master_transmit()
+  bus_unlock()
+  
+  if err != ESP_OK:
+    return ESP_ERR_TIMEOUT
+```
+
+**Note**: recovery is NOT called on every failed transaction — only after the full retry budget is exhausted.
 
 ## Destruction (`pn532_i2c_destroy`)
 
