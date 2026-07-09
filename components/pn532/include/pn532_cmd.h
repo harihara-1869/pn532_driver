@@ -226,9 +226,121 @@ esp_err_t pn532_tg_set_data(pn532_handle_t h,
                             size_t data_len,
                             uint32_t timeout_ms);
 
-/* TODO: secondary commands — implemented in next session */
-/* InListPassiveTarget, TgSetMetaData, TgGetMetaData,
- * TgResponseToInitiator, TgGetInitiatorCommand */
+/* ========================================================================= */
+/* InListPassiveTarget (0x4A)                                                 */
+/* ========================================================================= */
+
+/** @brief Bit rate / modulation type for passive target enumeration. */
+typedef enum {
+    PN532_BRTY_106A  = 0x00, /**< ISO/IEC 14443-A @ 106 kbps. */
+    PN532_BRTY_212F  = 0x01, /**< FeliCa @ 212 kbps. */
+    PN532_BRTY_424F  = 0x02, /**< FeliCa @ 424 kbps. */
+    PN532_BRTY_106B  = 0x03, /**< ISO/IEC 14443-B @ 106 kbps. */
+    PN532_BRTY_JEWEL = 0x04, /**< Jewel @ 106 kbps. */
+} pn532_brty_t;
+
+/** @brief Information about one discovered passive target. */
+typedef struct {
+    uint8_t tg;          /**< Target number assigned by PN532 (1-based). */
+    uint8_t atqa[2];     /**< ATQA (Type A only, little-endian). */
+    uint8_t sak;         /**< SAK (Type A only). */
+    uint8_t nfcid_len;   /**< Length of NFCID / UID. */
+    uint8_t nfcid[10];   /**< NFCID / UID bytes (up to 10 for triple-size). */
+    uint8_t ats_len;     /**< ATS length (0 if target does not support ISO14443-4). */
+    uint8_t ats[256];    /**< ATS response bytes. */
+} pn532_passive_target_t;
+
+/**
+ * @brief Discover passive NFC targets in the RF field.
+ *
+ * Sends InListPassiveTarget (0x4A). NbTg=0 in the response means no targets
+ * were found — this is returned as ESP_OK with *num_targets_out == 0.
+ *
+ * @param[in]  h                 Driver handle.
+ * @param[in]  max_targets       Maximum number of targets to detect (1 or 2).
+ * @param[in]  brty              Bit rate / modulation type.
+ * @param[in]  initiator_data    Optional extra initiator data (may be NULL).
+ * @param[in]  initiator_data_len Length of @p initiator_data (0 if NULL).
+ * @param[out] targets_out       Array of target info (caller allocates).
+ * @param[out] num_targets_out   Receives the number of targets found.
+ * @param[in]  timeout_ms        Maximum time to wait for the response.
+ * @return ESP_OK, ESP_ERR_INVALID_ARG, or transport/frame error.
+ */
+esp_err_t pn532_in_list_passive_target(pn532_handle_t h,
+                                       uint8_t max_targets,
+                                       pn532_brty_t brty,
+                                       const uint8_t *initiator_data,
+                                       size_t initiator_data_len,
+                                       pn532_passive_target_t *targets_out,
+                                       uint8_t *num_targets_out,
+                                       uint32_t timeout_ms);
+
+/* ========================================================================= */
+/* TgGetInitiatorCommand (0x88)                                               */
+/* ========================================================================= */
+
+/**
+ * @brief Retrieve the raw command from the NFC initiator.
+ *
+ * Used in ISO14443-4 PICC emulation after TgInitAsTarget returns with an
+ * indication that the initiator has sent a command.
+ *
+ * @param[in]  h          Driver handle.
+ * @param[out] buf        Destination buffer for the initiator data.
+ * @param[in]  buf_size   Capacity of @p buf.
+ * @param[out] out_len    Receives the number of bytes written.
+ * @param[in]  timeout_ms Maximum time to wait for the response.
+ * @return ESP_OK, ESP_ERR_INVALID_ARG, ESP_ERR_INVALID_SIZE, or ESP_FAIL.
+ */
+esp_err_t pn532_tg_get_initiator_command(pn532_handle_t h,
+                                         uint8_t *buf,
+                                         size_t buf_size,
+                                         size_t *out_len,
+                                         uint32_t timeout_ms);
+
+/* ========================================================================= */
+/* TgResponseToInitiator (0x90)                                               */
+/* ========================================================================= */
+
+/**
+ * @brief Send a response to the initiator in ISO14443-4 PICC emulation.
+ *
+ * Alternative to TgSetData for the initial response after RATS.
+ * Maximum 262 bytes. PN532 handles protocol chaining internally.
+ *
+ * @param[in] h          Driver handle.
+ * @param[in] data       Response payload (max 262 bytes).
+ * @param[in] data_len   Number of bytes in @p data.
+ * @param[in] timeout_ms Maximum time to wait for the RF exchange to complete.
+ * @return ESP_OK, ESP_ERR_INVALID_ARG, ESP_ERR_INVALID_SIZE, or ESP_FAIL.
+ */
+esp_err_t pn532_tg_response_to_initiator(pn532_handle_t h,
+                                         const uint8_t *data,
+                                         size_t data_len,
+                                         uint32_t timeout_ms);
+
+/* ========================================================================= */
+/* TgSetMetaData (0x94)                                                       */
+/* ========================================================================= */
+
+/**
+ * @brief Set meta-data to be sent to the initiator.
+ *
+ * Appends meta-data to the next TgResponseToInitiator / TgSetData payload.
+ * Maximum 262 bytes.
+ *
+ * @param[in] h          Driver handle.
+ * @param[in] data       Meta-data bytes (max 262 bytes).
+ * @param[in] data_len   Number of bytes in @p data.
+ * @param[in] timeout_ms Maximum time to wait for the response.
+ * @return ESP_OK, ESP_ERR_INVALID_ARG, ESP_ERR_INVALID_SIZE, or ESP_FAIL.
+ */
+esp_err_t pn532_tg_set_meta_data(pn532_handle_t h,
+                                 const uint8_t *data,
+                                 size_t data_len,
+                                 uint32_t timeout_ms);
+
+/* TODO: ISO-DEP application layer — separate component */
 
 #ifdef __cplusplus
 }

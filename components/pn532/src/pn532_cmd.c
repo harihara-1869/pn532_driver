@@ -423,3 +423,283 @@ esp_err_t pn532_tg_set_data(pn532_handle_t h,
 
     return ESP_OK;
 }
+
+/* ========================================================================= */
+/* InListPassiveTarget (0x4A)                                                 */
+/* ========================================================================= */
+
+#define PN532_CMD_IN_LIST_PASSIVE_TARGET  0x4A
+#define PN532_RSP_IN_LIST_PASSIVE_TARGET  0x4B
+
+esp_err_t pn532_in_list_passive_target(pn532_handle_t h,
+                                       uint8_t max_targets,
+                                       pn532_brty_t brty,
+                                       const uint8_t *initiator_data,
+                                       size_t initiator_data_len,
+                                       pn532_passive_target_t *targets_out,
+                                       uint8_t *num_targets_out,
+                                       uint32_t timeout_ms)
+{
+    if (h == NULL || targets_out == NULL || num_targets_out == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (max_targets < 1 || max_targets > 2) {
+        ESP_LOGE(TAG, "InListPassiveTarget: max_targets must be 1 or 2");
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (initiator_data_len > 0 && initiator_data == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    *num_targets_out = 0;
+
+    /* Build parameters: MaxTg(1) + BrTy(1) + InitiatorData(initiator_data_len) */
+    const size_t params_len = 2 + initiator_data_len;
+    uint8_t params[2 + PN532_MAX_PAYLOAD_LEN];
+    params[0] = max_targets;
+    params[1] = (uint8_t)brty;
+    if (initiator_data_len > 0) {
+        memcpy(&params[2], initiator_data, initiator_data_len);
+    }
+
+    esp_err_t err = pn532_send_command(h, PN532_CMD_IN_LIST_PASSIVE_TARGET,
+                                       params, params_len);
+    if (err != ESP_OK) {
+        return err;
+    }
+
+    /* Response can be large: NbTg + per-target data (ATQA+SAK+UID+ATS). */
+    uint8_t rsp[PN532_MAX_PAYLOAD_LEN];
+    size_t rsp_len = 0;
+    err = pn532_receive_response(h, rsp, sizeof(rsp), &rsp_len, timeout_ms);
+    if (err != ESP_OK) {
+        return err;
+    }
+
+    if (rsp_len < 2 || rsp[0] != PN532_RSP_IN_LIST_PASSIVE_TARGET) {
+        ESP_LOGE(TAG, "InListPassiveTarget: unexpected response cmd 0x%02x",
+                 rsp_len > 0 ? rsp[0] : 0);
+        return ESP_FAIL;
+    }
+
+    const uint8_t nb_tg = rsp[1];
+    if (nb_tg == 0) {
+        ESP_LOGD(TAG, "InListPassiveTarget: no targets found");
+        return ESP_OK;
+    }
+
+    /* Parse target data for Type A (106 kbps ISO14443-A).
+     * Response format per target:
+     *   Tg(1) ATQA(2) SAK(1) NFCIDLen(1) NFCID(n) [AtsLen(1) ATS(m)]
+     */
+    size_t off = 2;  /* past cmd byte and NbTg */
+    for (uint8_t i = 0; i < nb_tg && i < max_targets; i++) {
+        if (off + 5 > rsp_len) {
+            ESP_LOGE(TAG, "InListPassiveTarget: truncated target data");
+            return ESP_FAIL;
+        }
+
+        pn532_passive_target_t *t = &targets_out[i];
+        memset(t, 0, sizeof(*t));
+
+        t->tg = rsp[off++];
+        t->atqa[0] = rsp[off++];
+        t->atqa[1] = rsp[off++];
+        t->sak = rsp[off++];
+
+        const uint8_t nfcid_len = rsp[off++];
+        if (nfcid_len > sizeof(t->nfcid)) {
+            ESP_LOGE(TAG, "InListPassiveTarget: NFCID too long (%u)", nfcid_len);
+            return ESP_FAIL;
+        }
+        t->nfcid_len = nfcid_len;
+
+        if (off + nfcid_len > rsp_len) {
+            ESP_LOGE(TAG, "InListPassiveTarget: truncated NFCID");
+            return ESP_FAIL;
+        }
+        memcpy(t->nfcid, &rsp[off], nfcid_len);
+        off += nfcid_len;
+
+        /* ATS is present if SAK bit 5 is set (ISO14443-4 compliant). */
+        t->ats_len = 0;
+        if ((t->sak & 0x20) && off < rsp_len) {
+            const uint8_t ats_len = rsp[off++];
+            t->ats_len = ats_len;
+            if (off + ats_len > rsp_len) {
+                ESP_LOGE(TAG, "InListPassiveTarget: truncated ATS");
+                return ESP_FAIL;
+            }
+            memcpy(t->ats, &rsp[off], ats_len);
+            off += ats_len;
+        }
+
+        ESP_LOGD(TAG, "Target %u: tg=%u SAK=0x%02x NFCID len=%u ATS len=%u",
+                 i, t->tg, t->sak, t->nfcid_len, t->ats_len);
+    }
+
+    *num_targets_out = (nb_tg < max_targets) ? nb_tg : max_targets;
+    return ESP_OK;
+}
+
+/* ========================================================================= */
+/* TgGetInitiatorCommand (0x88)                                               */
+/* ========================================================================= */
+
+#define PN532_CMD_TG_GET_INITIATOR_COMMAND  0x88
+#define PN532_RSP_TG_GET_INITIATOR_COMMAND  0x89
+
+esp_err_t pn532_tg_get_initiator_command(pn532_handle_t h,
+                                         uint8_t *buf,
+                                         size_t buf_size,
+                                         size_t *out_len,
+                                         uint32_t timeout_ms)
+{
+    if (h == NULL || buf == NULL || out_len == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    esp_err_t err = pn532_send_command(h, PN532_CMD_TG_GET_INITIATOR_COMMAND,
+                                       NULL, 0);
+    if (err != ESP_OK) {
+        return err;
+    }
+
+    uint8_t rsp[2 + PN532_TG_MAX_DATA_LEN];
+    size_t rsp_len = 0;
+    err = pn532_receive_response(h, rsp, sizeof(rsp), &rsp_len, timeout_ms);
+    if (err != ESP_OK) {
+        return err;
+    }
+
+    /* Response: D5 89 Status [DataIn...] */
+    if (rsp_len < 2 || rsp[0] != PN532_RSP_TG_GET_INITIATOR_COMMAND) {
+        ESP_LOGE(TAG, "TgGetInitiatorCommand: unexpected response cmd 0x%02x",
+                 rsp_len > 0 ? rsp[0] : 0);
+        return ESP_FAIL;
+    }
+
+    const uint8_t status = rsp[1];
+    if (status != PN532_ERR_NONE) {
+        ESP_LOGE(TAG, "TgGetInitiatorCommand: PN532 error 0x%02x", status);
+        return ESP_FAIL;
+    }
+
+    /* Data starts at offset 2 (past cmd byte and status). */
+    const size_t data_len = (rsp_len > 2) ? (rsp_len - 2) : 0;
+    if (data_len > buf_size) {
+        ESP_LOGE(TAG, "TgGetInitiatorCommand: data %u > buffer %u",
+                 (unsigned)data_len, (unsigned)buf_size);
+        return ESP_ERR_INVALID_SIZE;
+    }
+
+    if (data_len > 0) {
+        memcpy(buf, &rsp[2], data_len);
+    }
+    *out_len = data_len;
+    return ESP_OK;
+}
+
+/* ========================================================================= */
+/* TgResponseToInitiator (0x90)                                               */
+/* ========================================================================= */
+
+#define PN532_CMD_TG_RESPONSE_TO_INITIATOR  0x90
+#define PN532_RSP_TG_RESPONSE_TO_INITIATOR  0x91
+
+esp_err_t pn532_tg_response_to_initiator(pn532_handle_t h,
+                                         const uint8_t *data,
+                                         size_t data_len,
+                                         uint32_t timeout_ms)
+{
+    if (h == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (data_len > 0 && data == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (data_len > PN532_TG_MAX_DATA_LEN) {
+        ESP_LOGE(TAG, "TgResponseToInitiator: data_len %u > max %u",
+                 (unsigned)data_len, PN532_TG_MAX_DATA_LEN);
+        return ESP_ERR_INVALID_SIZE;
+    }
+
+    esp_err_t err = pn532_send_command(h, PN532_CMD_TG_RESPONSE_TO_INITIATOR,
+                                       data, data_len);
+    if (err != ESP_OK) {
+        return err;
+    }
+
+    uint8_t rsp[2];
+    size_t rsp_len = 0;
+    err = pn532_receive_response(h, rsp, sizeof(rsp), &rsp_len, timeout_ms);
+    if (err != ESP_OK) {
+        return err;
+    }
+
+    if (rsp_len < 2 || rsp[0] != PN532_RSP_TG_RESPONSE_TO_INITIATOR) {
+        ESP_LOGE(TAG, "TgResponseToInitiator: unexpected response cmd 0x%02x",
+                 rsp_len > 0 ? rsp[0] : 0);
+        return ESP_FAIL;
+    }
+
+    const uint8_t status = rsp[1];
+    if (status != PN532_ERR_NONE) {
+        ESP_LOGE(TAG, "TgResponseToInitiator: PN532 error 0x%02x", status);
+        return ESP_FAIL;
+    }
+
+    return ESP_OK;
+}
+
+/* ========================================================================= */
+/* TgSetMetaData (0x94)                                                       */
+/* ========================================================================= */
+
+#define PN532_CMD_TG_SET_META_DATA  0x94
+#define PN532_RSP_TG_SET_META_DATA  0x95
+
+esp_err_t pn532_tg_set_meta_data(pn532_handle_t h,
+                                 const uint8_t *data,
+                                 size_t data_len,
+                                 uint32_t timeout_ms)
+{
+    if (h == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (data_len > 0 && data == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (data_len > PN532_TG_MAX_DATA_LEN) {
+        ESP_LOGE(TAG, "TgSetMetaData: data_len %u > max %u",
+                 (unsigned)data_len, PN532_TG_MAX_DATA_LEN);
+        return ESP_ERR_INVALID_SIZE;
+    }
+
+    esp_err_t err = pn532_send_command(h, PN532_CMD_TG_SET_META_DATA,
+                                       data, data_len);
+    if (err != ESP_OK) {
+        return err;
+    }
+
+    uint8_t rsp[2];
+    size_t rsp_len = 0;
+    err = pn532_receive_response(h, rsp, sizeof(rsp), &rsp_len, timeout_ms);
+    if (err != ESP_OK) {
+        return err;
+    }
+
+    if (rsp_len < 2 || rsp[0] != PN532_RSP_TG_SET_META_DATA) {
+        ESP_LOGE(TAG, "TgSetMetaData: unexpected response cmd 0x%02x",
+                 rsp_len > 0 ? rsp[0] : 0);
+        return ESP_FAIL;
+    }
+
+    const uint8_t status = rsp[1];
+    if (status != PN532_ERR_NONE) {
+        ESP_LOGE(TAG, "TgSetMetaData: PN532 error 0x%02x", status);
+        return ESP_FAIL;
+    }
+
+    return ESP_OK;
+}

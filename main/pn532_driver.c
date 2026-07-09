@@ -3,12 +3,16 @@
  * @brief Command-layer test: exercises every implemented pn532_cmd function.
  *
  * Commands tested:
- *   1. pn532_get_firmware_version  (0x02)
- *   2. pn532_sam_configuration     (0x14)  — NORMAL mode
- *   3. pn532_set_parameters        (0x12)  — default flags, then with flags
- *   4. pn532_tg_init_as_target     (0x8C)  — short timeout (no reader present)
- *   5. pn532_tg_get_data           (0x86)  — short timeout (depends on 4)
- *   6. pn532_tg_set_data           (0x8E)  — short timeout (depends on 4)
+ *   1. pn532_get_firmware_version       (0x02)
+ *   2. pn532_sam_configuration          (0x14)  — NORMAL mode
+ *   3. pn532_set_parameters             (0x12)  — default flags, then with flags
+ *   4. pn532_tg_init_as_target          (0x8C)  — short timeout (no reader present)
+ *   5. pn532_tg_get_data                (0x86)  — short timeout (depends on 4)
+ *   6. pn532_tg_set_data                (0x8E)  — short timeout (depends on 4)
+ *   7. pn532_in_list_passive_target     (0x4A)  — short timeout (no card in field)
+ *   8. pn532_tg_get_initiator_command   (0x88)  — short timeout (no active target)
+ *   9. pn532_tg_response_to_initiator   (0x90)  — short timeout (no active target)
+ *  10. pn532_tg_set_meta_data           (0x94)  — short timeout (no active target)
  *
  * Also validates core lifecycle: pn532_init, pn532_wakeup, pn532_deinit.
  *
@@ -149,6 +153,59 @@ static tc_result_t test_tg_set_data(pn532_handle_t h)
     return r;
 }
 
+/** @brief Test 7 — InListPassiveTarget (no card in field expected). */
+static tc_result_t test_in_list_passive_target(pn532_handle_t h)
+{
+    pn532_passive_target_t targets[1] = {};
+    uint8_t num_targets = 0;
+    esp_err_t err = pn532_in_list_passive_target(h, 1, PN532_BRTY_106A,
+                                                  NULL, 0,
+                                                  targets, &num_targets, 1000);
+    if (err == ESP_ERR_TIMEOUT || (err == ESP_OK && num_targets == 0)) {
+        log_tc("InListPassiveTarget (no card)", TC_SKIP, err);
+        return TC_SKIP;
+    }
+    tc_result_t r = tc_check(err, false);
+    log_tc("InListPassiveTarget (106A)", r, err);
+    if (r == TC_PASS && num_targets > 0) {
+        ESP_LOGI(TAG, "  Found %u target(s), first UID len=%u",
+                 num_targets, targets[0].nfcid_len);
+    }
+    return r;
+}
+
+/** @brief Test 8 — TgGetInitiatorCommand (PN532 accepts even without active target). */
+static tc_result_t test_tg_get_initiator_command(pn532_handle_t h)
+{
+    uint8_t buf[64] = {};
+    size_t out_len = 0;
+    esp_err_t err = pn532_tg_get_initiator_command(h, buf, sizeof(buf),
+                                                    &out_len, 500);
+    tc_result_t r = tc_check(err, false);
+    log_tc("TgGetInitiatorCommand", r, err);
+    return r;
+}
+
+/** @brief Test 9 — TgResponseToInitiator (PN532 accepts even without active target). */
+static tc_result_t test_tg_response_to_initiator(pn532_handle_t h)
+{
+    const uint8_t payload[] = {0x90, 0x00};
+    esp_err_t err = pn532_tg_response_to_initiator(h, payload, sizeof(payload), 500);
+    tc_result_t r = tc_check(err, false);
+    log_tc("TgResponseToInitiator", r, err);
+    return r;
+}
+
+/** @brief Test 10 — TgSetMetaData (expected to skip without active target). */
+static tc_result_t test_tg_set_meta_data(pn532_handle_t h)
+{
+    const uint8_t payload[] = {0x01, 0x02};
+    esp_err_t err = pn532_tg_set_meta_data(h, payload, sizeof(payload), 500);
+    tc_result_t r = (err != ESP_OK) ? TC_SKIP : TC_PASS;
+    log_tc("TgSetMetaData (500 ms timeout)", r, err);
+    return r;
+}
+
 /* Main ------------------------------------------------------------------- */
 
 void app_main(void)
@@ -225,6 +282,18 @@ void app_main(void)
     if (r == TC_PASS) pass++; else if (r == TC_FAIL) fail++; else skip++;
 
     r = test_tg_set_data(h);
+    if (r == TC_PASS) pass++; else if (r == TC_FAIL) fail++; else skip++;
+
+    r = test_in_list_passive_target(h);
+    if (r == TC_PASS) pass++; else if (r == TC_FAIL) fail++; else skip++;
+
+    r = test_tg_get_initiator_command(h);
+    if (r == TC_PASS) pass++; else if (r == TC_FAIL) fail++; else skip++;
+
+    r = test_tg_response_to_initiator(h);
+    if (r == TC_PASS) pass++; else if (r == TC_FAIL) fail++; else skip++;
+
+    r = test_tg_set_meta_data(h);
     if (r == TC_PASS) pass++; else if (r == TC_FAIL) fail++; else skip++;
 
     /* ---- Summary ----------------------------------------------------- */
