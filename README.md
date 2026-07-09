@@ -57,7 +57,6 @@ pn532_driver/
   - [x] `pn532_tg_get_initiator_command()` — retrieve raw command from initiator
   - [x] `pn532_tg_response_to_initiator()` — send response in ISO14443-4 PICC mode
   - [x] `pn532_tg_set_meta_data()` — set meta-data for next response
-- [x] Command-layer test suite (all commands, on-target)
 
 **TODO:**
 - [ ] Additional command wrappers
