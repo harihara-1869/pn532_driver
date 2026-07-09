@@ -106,6 +106,29 @@ typedef struct {
      * @param ctx  Transport-private context (may be NULL).
      */
     void (*destroy)(void *ctx);
+
+    /**
+     * @brief Assert hardware reset on the PN532 (optional, NULL if not supported).
+     * @param ctx        Transport-private context.
+     * @param pulse_ms   Duration to hold reset LOW (milliseconds).
+     * @param settle_ms  Wait after reset releases before returning (ms).
+     * @return ESP_OK, or ESP_ERR_NOT_SUPPORTED if transport has no reset pin.
+     */
+    esp_err_t (*reset_device)(void *ctx, uint32_t pulse_ms, uint32_t settle_ms);
+
+    /**
+     * @brief Acquire the transport bus mutex (optional, NULL if not applicable).
+     * @param ctx         Transport-private context.
+     * @param timeout_ms  Maximum time to wait for the mutex.
+     * @return ESP_OK on success; ESP_ERR_TIMEOUT if not acquired in time.
+     */
+    esp_err_t (*bus_lock)(void *ctx, uint32_t timeout_ms);
+
+    /**
+     * @brief Release the transport bus mutex (optional, NULL if not applicable).
+     * @param ctx  Transport-private context.
+     */
+    void (*bus_unlock)(void *ctx);
 } pn532_transport_ops_t;
 
 /**
@@ -213,6 +236,22 @@ esp_err_t pn532_receive_response(pn532_handle_t h,
  *         bus error from the transport.
  */
 esp_err_t pn532_wakeup(pn532_handle_t h);
+
+/**
+ * @brief Assert hardware reset on the PN532.
+ *
+ * Acquires the bus mutex before asserting reset and releases it after
+ * settle_ms completes, so no I2C transaction can race with the reset.
+ * Delegates to the transport's reset_device internally.
+ *
+ * Returns ESP_ERR_NOT_SUPPORTED if the transport has no reset pin.
+ *
+ * @param[in] h          Driver handle.
+ * @param[in] pulse_ms   Duration to hold reset LOW (milliseconds).
+ * @param[in] settle_ms  Wait after reset releases before returning (ms).
+ * @return ESP_OK, ESP_ERR_INVALID_ARG, ESP_ERR_NOT_SUPPORTED, or transport error.
+ */
+esp_err_t pn532_reset(pn532_handle_t h, uint32_t pulse_ms, uint32_t settle_ms);
 
 /* TODO: command layer — implemented in next session.
  *

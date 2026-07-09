@@ -15,6 +15,7 @@
 
 #include <stdlib.h>
 #include <string.h>
+#include <inttypes.h>
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -345,6 +346,63 @@ static esp_err_t pn532_read_ack(pn532_handle_t h, uint32_t timeout_ms)
 }
 
 /* ------------------------------------------------------------------------- */
+/* Frame resync                                                               */
+/* ------------------------------------------------------------------------- */
+
+/** Maximum bytes to consume during resync before giving up. */
+#define PN532_RESYNC_MAX_BYTES  512
+
+/**
+ * @brief Drain incoming bytes until a valid preamble sequence is found.
+ *
+ * Reads one byte at a time using tp_read_frame (single-byte over-reads),
+ * maintaining a 3-byte sliding window looking for {0x00, 0x00, 0xFF}.
+ *
+ * @param h           Driver handle.
+ * @param timeout_ms  Maximum time to wait.
+ * @return ESP_OK if preamble found; ESP_FAIL if 512 bytes exhausted;
+ *         ESP_ERR_TIMEOUT if timeout elapsed.
+ */
+static esp_err_t resync_frame(pn532_handle_t h, uint32_t timeout_ms)
+{
+    uint8_t window[3] = {0};
+    size_t consumed = 0;
+
+    ESP_LOGW(TAG, "attempting frame resync");
+
+    while (consumed < PN532_RESYNC_MAX_BYTES) {
+        esp_err_t err = tp_wait_ready(h, timeout_ms);
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "frame resync timed out after %"PRIu32" ms", timeout_ms);
+            return err;
+        }
+
+        /* Read status byte + 1 frame byte (2 bytes total). */
+        uint8_t raw[2];
+        err = tp_read_frame(h, raw, sizeof(raw));
+        if (err != ESP_OK) {
+            return err;
+        }
+
+        /* Shift window and add new byte. */
+        window[0] = window[1];
+        window[1] = window[2];
+        window[2] = raw[1];  /* raw[0] is status, raw[1] is data */
+        consumed++;
+
+        /* Check for preamble: 0x00 0x00 0xFF */
+        if (window[0] == 0x00 && window[1] == 0x00 && window[2] == 0xFF) {
+            ESP_LOGI(TAG, "frame resync succeeded after %u bytes", (unsigned)consumed);
+            return ESP_OK;
+        }
+    }
+
+    ESP_LOGE(TAG, "resync exhausted %d bytes without finding preamble",
+             PN532_RESYNC_MAX_BYTES);
+    return ESP_FAIL;
+}
+
+/* ------------------------------------------------------------------------- */
 /* Public API                                                                 */
 /* ------------------------------------------------------------------------- */
 
@@ -438,9 +496,25 @@ esp_err_t pn532_receive_response(pn532_handle_t h,
 
     err = pn532_parse_frame(raw, sizeof(raw), buf, buf_size, out_len);
     if (err == ESP_ERR_INVALID_CRC) {
-        /* Ask the chip to retransmit; best-effort, ignore NACK write result. */
-        ESP_LOGW(TAG, "checksum error, sending NACK to request retransmit");
-        (void)tp_write(h, PN532_NACK_FRAME, sizeof(PN532_NACK_FRAME));
+        /* Checksum mismatch — attempt frame resync before giving up. */
+        ESP_LOGW(TAG, "checksum mismatch — attempting frame resync");
+        esp_err_t resync_err = resync_frame(h, timeout_ms);
+        if (resync_err == ESP_OK) {
+            /* Resync succeeded — retry the receive exactly once. */
+            ESP_LOGI(TAG, "resync succeeded, retrying receive");
+            err = tp_wait_ready(h, timeout_ms);
+            if (err == ESP_OK) {
+                err = tp_read_frame(h, raw, sizeof(raw));
+                if (err == ESP_OK) {
+                    err = pn532_parse_frame(raw, sizeof(raw), buf, buf_size, out_len);
+                }
+            }
+        }
+        /* If resync failed or retry still fails, return original CRC error. */
+        if (err == ESP_ERR_INVALID_CRC) {
+            ESP_LOGW(TAG, "checksum error, sending NACK to request retransmit");
+            (void)tp_write(h, PN532_NACK_FRAME, sizeof(PN532_NACK_FRAME));
+        }
     }
     return err;
 }
@@ -464,5 +538,44 @@ esp_err_t pn532_wakeup(pn532_handle_t h)
     /* T_osc_start: typically a few hundred us, up to ~2 ms depending on the
      * quartz and board. Wait the worst case before the first real command. */
     vTaskDelay(pdMS_TO_TICKS(2));
+    return err;
+}
+
+esp_err_t pn532_reset(pn532_handle_t h, uint32_t pulse_ms, uint32_t settle_ms)
+{
+    if (h == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    /* Check if transport supports reset. */
+    if (h->ops->reset_device == NULL) {
+        ESP_LOGW(TAG, "transport has no reset capability");
+        return ESP_ERR_NOT_SUPPORTED;
+    }
+
+    /* Acquire bus mutex to prevent I2C transactions during reset. */
+    if (h->ops->bus_lock != NULL) {
+        esp_err_t err = h->ops->bus_lock(h->ctx, 5000);
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "failed to acquire bus mutex for reset: %s",
+                     esp_err_to_name(err));
+            return err;
+        }
+    }
+
+    /* Assert reset. */
+    esp_err_t err = h->ops->reset_device(h->ctx, pulse_ms, settle_ms);
+
+    /* Release bus mutex. */
+    if (h->ops->bus_unlock != NULL) {
+        h->ops->bus_unlock(h->ctx);
+    }
+
+    if (err == ESP_ERR_NOT_SUPPORTED) {
+        ESP_LOGW(TAG, "transport has no reset pin configured");
+    } else if (err != ESP_OK) {
+        ESP_LOGE(TAG, "hardware reset failed: %s", esp_err_to_name(err));
+    }
+
     return err;
 }

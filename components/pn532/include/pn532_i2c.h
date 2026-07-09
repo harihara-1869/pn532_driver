@@ -48,6 +48,7 @@ typedef struct {
     int        sda_gpio;   /**< SDA GPIO number (required; set by application). */
     int        scl_gpio;   /**< SCL GPIO number (required; set by application). */
     int        irq_gpio;   /**< IRQ (P70_IRQ) GPIO number; -1 if not wired -> polling mode. */
+    int        rst_gpio;   /**< RST GPIO number; -1 if not wired -> no hardware reset. */
     i2c_port_t port;       /**< I2C port number (e.g. I2C_NUM_0). */
     uint32_t   clk_speed;  /**< SCL frequency in Hz; 0 -> PN532_I2C_DEFAULT_CLK_HZ (400 kHz). */
 } pn532_i2c_config_t;
@@ -86,6 +87,30 @@ esp_err_t pn532_i2c_create(const pn532_i2c_config_t *cfg,
  * @param[in] ctx Transport context from @ref pn532_i2c_create (may be NULL).
  */
 void pn532_i2c_destroy(void *ctx);
+
+/**
+ * @brief Assert hardware reset on the PN532.
+ *
+ * Drives rst_gpio LOW for @p pulse_ms milliseconds, then HIGH.
+ * After releasing reset, waits @p settle_ms milliseconds for the PN532
+ * oscillator to stabilise before returning.
+ *
+ * Typical values: pulse_ms = 10, settle_ms = 100.
+ *
+ * If rst_gpio was configured as -1, returns ESP_ERR_NOT_SUPPORTED
+ * immediately without touching the bus.
+ *
+ * The caller is responsible for re-running SAMConfiguration after reset.
+ *
+ * @param ctx        I2C transport context (the void* returned by
+ *                   pn532_i2c_create).
+ * @param pulse_ms   Duration to hold reset LOW (milliseconds).
+ * @param settle_ms  Wait after reset releases before returning (ms).
+ * @return ESP_OK, or ESP_ERR_NOT_SUPPORTED if no rst_gpio configured.
+ */
+esp_err_t pn532_i2c_reset_device(void *ctx,
+                                  uint32_t pulse_ms,
+                                  uint32_t settle_ms);
 
 #ifdef __cplusplus
 }
