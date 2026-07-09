@@ -2,14 +2,24 @@
 
 ## Layered Design
 
-The driver is split into two layers connected by a vtable (function-pointer table). The core layer is transport-agnostic; the I2C backend is swappable.
+The driver is split into three layers connected by vtables. The core layer is transport-agnostic; the command layer builds on top of the core; the I2C backend is swappable.
 
 ```
 ┌─────────────────────────────────────────────────┐
 │              Application (main/)                │
-│         pn532_driver.c — smoke test             │
+│         pn532_driver.c — test suite             │
 └────────────────────┬────────────────────────────┘
-                     │ calls pn532_init / pn532_send_command / etc.
+                     │ calls pn532_get_firmware_version / pn532_tg_init_as_target / etc.
+                     ▼
+┌─────────────────────────────────────────────────┐
+│         Command Layer (pn532_cmd.c)             │
+│                                                 │
+│  GetFirmwareVersion    SAMConfiguration         │
+│  SetParameters         TgInitAsTarget           │
+│  TgGetData             TgSetData                │
+│  pn532_error_code_t (19 PN532 error codes)      │
+└────────────────────┬────────────────────────────┘
+                     │ calls pn532_send_command / pn532_receive_response
                      ▼
 ┌─────────────────────────────────────────────────┐
 │           Core Driver (pn532.c)                 │
@@ -40,6 +50,19 @@ The driver is split into two layers connected by a vtable (function-pointer tabl
 ```
 
 ## Module Responsibilities
+
+### pn532_cmd.c — Command Layer
+
+High-level wrappers that each send one PN532 command and parse its response. Knows the PN532 command set but not the frame format or transport. Owns:
+
+- **GetFirmwareVersion (0x02)**: queries IC code, firmware version/revision, and capability bitmask. Validates IC == 0x32.
+- **SAMConfiguration (0x14)**: sets the SAM operating mode (NORMAL, VIRTUAL_CARD, WIRED_CARD, DUAL_CARD) and IRQ behaviour. Only VIRTUAL_CARD mode sends the timeout byte.
+- **SetParameters (0x12)**: sets communication flags (NAD, DID, auto-ATR/RATS, ISO14443-4 PICC, remove preamble). Rejects RFU bits 3 and 7.
+- **TgInitAsTarget (0x8C)**: puts the PN532 into card-emulation mode. Blocks until an external RF reader activates the chip or timeout elapses. Builds the MifareParams + FeliCaParams + NFCID3t + optional Gt/Tk payload.
+- **TgGetData (0x86)**: receives data from the NFC initiator. Handles MI-bit chaining transparently (accumulates fragments up to PN532_MAX_PAYLOAD_LEN).
+- **TgSetData (0x8E)**: sends data to the NFC initiator. Max 262 bytes per exchange.
+
+All functions validate PN532 error status bytes using the `pn532_error_code_t` enum (19 error codes from 0x00 to 0x29).
 
 ### pn532.c — Core Driver
 

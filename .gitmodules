@@ -1,3 +1,0 @@
-[submodule "components/esp-idf-pn532"]
-	path = components/esp-idf-pn532
-	url = https://github.com/Garag/esp-idf-pn532.git

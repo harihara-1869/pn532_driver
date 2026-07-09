@@ -1,5 +1,206 @@
 # API Reference
 
+## Command Layer (`pn532_cmd.h`)
+
+### Types
+
+#### `pn532_error_code_t`
+
+```c
+typedef enum {
+    PN532_ERR_NONE            = 0x00,
+    PN532_ERR_TIMEOUT         = 0x01,
+    PN532_ERR_CRC             = 0x02,
+    PN532_ERR_PARITY          = 0x03,
+    PN532_ERR_BITCOUNT        = 0x04,
+    PN532_ERR_FRAMING         = 0x05,
+    PN532_ERR_COLLISION       = 0x06,
+    PN532_ERR_BUF_OVERFLOW    = 0x07,
+    PN532_ERR_RF_OVERFLOW     = 0x09,
+    PN532_ERR_RF_TIMING       = 0x0A,
+    PN532_ERR_RF_PROTOCOL     = 0x0B,
+    PN532_ERR_TEMPERATURE     = 0x0D,
+    PN532_ERR_BUFFER_INSUFFI  = 0x0E,
+    PN532_ERR_NACK            = 0x0F,
+    PN532_ERR_DEP_INVALID     = 0x10,
+    PN532_ERR_DEP_MISMATCH    = 0x11,
+    PN532_ERR_OVER_CURRENT    = 0x13,
+    PN532_ERR_NAD_MISSING     = 0x14,
+    PN532_ERR_TARGET_RELEASED = 0x29,
+} pn532_error_code_t;
+```
+
+#### `pn532_firmware_version_t`
+
+```c
+typedef struct {
+    uint8_t ic;      // IC code — 0x32 for PN532
+    uint8_t ver;     // Firmware version (upper nibble major, lower minor)
+    uint8_t rev;     // Firmware revision
+    uint8_t support; // Capability bitmask: bit 0 = 14443A, bit 1 = 14443B, bit 2 = 18092
+} pn532_firmware_version_t;
+```
+
+#### `pn532_sam_mode_t`
+
+```c
+typedef enum {
+    PN532_SAM_NORMAL       = 0x01,
+    PN532_SAM_VIRTUAL_CARD = 0x02,
+    PN532_SAM_WIRED_CARD   = 0x03,
+    PN532_SAM_DUAL_CARD    = 0x04,
+} pn532_sam_mode_t;
+```
+
+#### `pn532_tg_init_params_t`
+
+```c
+typedef struct {
+    uint8_t sens_res[2];    // ATQA (LSB first)
+    uint8_t nfcid1[3];      // 3-byte NFCID1 (single size)
+    uint8_t sel_res;        // SAK: 0x20 = ISO14443-4
+    uint8_t nfcid2[8];      // FeliCa NFCID2
+    uint8_t pad[8];         // FeliCa pad
+    uint8_t system_code[2]; // FeliCa system code
+    uint8_t nfcid3[10];     // NFCID3t for ATR_RES
+    const uint8_t *gt;      // General bytes (optional, max 47)
+    uint8_t gt_len;
+    const uint8_t *tk;      // Historical bytes (optional, max 47)
+    uint8_t tk_len;
+    uint8_t mode;           // PN532_TG_MODE_* flags
+} pn532_tg_init_params_t;
+```
+
+#### `pn532_tg_init_result_t`
+
+```c
+typedef struct {
+    uint8_t mode;  // Actual mode PN532 was activated in
+} pn532_tg_init_result_t;
+```
+
+### Constants
+
+#### SetParameters flags
+
+| Constant | Bit | Description |
+|----------|-----|-------------|
+| `PN532_PARAM_NAD_USED` | 0 | Node Address byte enabled |
+| `PN532_PARAM_DID_USED` | 1 | Device ID byte enabled |
+| `PN532_PARAM_AUTO_ATR_RES` | 2 | Auto ATR_RES on activation |
+| `PN532_PARAM_AUTO_RATS` | 4 | Auto RATS on ISO14443-4 activation |
+| `PN532_PARAM_ISO14443_4_PICC` | 5 | ISO14443-4 PICC emulation |
+| `PN532_PARAM_REMOVE_PREAMBLE` | 6 | Remove preamble from responses |
+
+#### TgInitAsTarget mode flags
+
+| Constant | Bit | Description |
+|----------|-----|-------------|
+| `PN532_TG_MODE_PASSIVE_ONLY` | 0 | Passive activation only |
+| `PN532_TG_MODE_DEP_ONLY` | 1 | DEP activation only |
+| `PN532_TG_MODE_PICC_ONLY` | 2 | PICC activation only |
+
+### Functions
+
+#### `pn532_get_firmware_version`
+
+```c
+esp_err_t pn532_get_firmware_version(pn532_handle_t h, pn532_firmware_version_t *out);
+```
+
+Query PN532 firmware version (connectivity check). Validates IC == 0x32.
+
+| Return | Condition |
+|--------|-----------|
+| `ESP_OK` | Success |
+| `ESP_ERR_INVALID_ARG` | NULL handle or output pointer |
+| `ESP_FAIL` | IC != 0x32 or unexpected response |
+
+#### `pn532_sam_configuration`
+
+```c
+esp_err_t pn532_sam_configuration(pn532_handle_t h,
+                                  pn532_sam_mode_t mode,
+                                  uint8_t timeout_50ms,
+                                  bool irq_enabled);
+```
+
+Configure SAM mode. `timeout_50ms` only used in `PN532_SAM_VIRTUAL_CARD` mode.
+
+| Return | Condition |
+|--------|-----------|
+| `ESP_OK` | Success |
+| `ESP_ERR_INVALID_ARG` | NULL handle |
+| `ESP_FAIL` | Unexpected PN532 response |
+
+#### `pn532_set_parameters`
+
+```c
+esp_err_t pn532_set_parameters(pn532_handle_t h, uint8_t flags);
+```
+
+Set communication parameters. Rejects RFU bits 3 and 7.
+
+| Return | Condition |
+|--------|-----------|
+| `ESP_OK` | Success |
+| `ESP_ERR_INVALID_ARG` | NULL handle or RFU bits set |
+| `ESP_FAIL` | Unexpected PN532 response |
+
+#### `pn532_tg_init_as_target`
+
+```c
+esp_err_t pn532_tg_init_as_target(pn532_handle_t h,
+                                  const pn532_tg_init_params_t *params,
+                                  pn532_tg_init_result_t *result,
+                                  uint32_t timeout_ms);
+```
+
+Initialise PN532 as NFC target. Blocks until an external reader activates the chip.
+
+| Return | Condition |
+|--------|-----------|
+| `ESP_OK` | Activated by reader |
+| `ESP_ERR_INVALID_ARG` | NULL args or gt/tk too long (>47) |
+| `ESP_ERR_TIMEOUT` | No reader within timeout |
+| `ESP_FAIL` | PN532 returned error status |
+
+#### `pn532_tg_get_data`
+
+```c
+esp_err_t pn532_tg_get_data(pn532_handle_t h,
+                            uint8_t *buf, size_t buf_size,
+                            size_t *out_len, uint32_t timeout_ms);
+```
+
+Receive data from NFC initiator. Handles MI-bit chaining transparently.
+
+| Return | Condition |
+|--------|-----------|
+| `ESP_OK` | Data received |
+| `ESP_ERR_INVALID_ARG` | NULL args |
+| `ESP_ERR_INVALID_SIZE` | Accumulated data exceeds buffer |
+| `ESP_FAIL` | PN532 error status |
+
+#### `pn532_tg_set_data`
+
+```c
+esp_err_t pn532_tg_set_data(pn532_handle_t h,
+                            const uint8_t *data, size_t data_len,
+                            uint32_t timeout_ms);
+```
+
+Send data to NFC initiator. Max 262 bytes.
+
+| Return | Condition |
+|--------|-----------|
+| `ESP_OK` | Data sent |
+| `ESP_ERR_INVALID_ARG` | NULL handle, or NULL data with non-zero len |
+| `ESP_ERR_INVALID_SIZE` | data_len > 262 |
+| `ESP_FAIL` | PN532 error status |
+
+---
+
 ## Core Driver (`pn532.h`)
 
 ### Types
