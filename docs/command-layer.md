@@ -134,6 +134,41 @@ Sends data from the PN532 to the NFC initiator.
 - Max 262 bytes per exchange (`PN532_TG_MAX_DATA_LEN`)
 - Response: `{0x8F, status}` — status byte only
 
+### TgGetTargetStatus (0x8A)
+
+Queries the current state of the PN532 target session. No parameters. Valid to call at any point after TgInitAsTarget has been sent — useful for detecting reader departure (RELEASED/DESELECTED) without waiting for a TgGetData timeout.
+
+**Response format**: `{0x8B, State, BRit}` (3 bytes)
+
+| Field | Offset | Description |
+|-------|--------|-------------|
+| State | buf[1] | Current target state (see below) |
+| BRit | buf[2] | Baud rate in both directions (only meaningful when ACTIVATED) |
+
+**State values** (`pn532_tg_state_t`):
+
+| Value | Constant | Description |
+|-------|----------|-------------|
+| 0x00 | `PN532_TG_STATE_IDLE` | TG_IDLE / TG_RELEASED |
+| 0x01 | `PN532_TG_STATE_ACTIVATED` | TG_ACTIVATED (DEP) |
+| 0x02 | `PN532_TG_STATE_DESELECTED` | TG_DESELECTED (DEP) |
+| 0x80 | `PN532_TG_STATE_PICC_RELEASED` | PICC_RELEASED (ISO14443-4) |
+| 0x81 | `PN532_TG_STATE_PICC_ACTIVATED` | PICC_ACTIVATED (ISO14443-4) |
+| 0x82 | `PN532_TG_STATE_PICC_DESELECTED` | PICC_DESELECTED (ISO14443-4) |
+
+Unknown state values are logged at WARN but do not cause a failure — future firmware may add new states.
+
+**BRit byte encoding** (only meaningful when `State == PN532_TG_STATE_ACTIVATED`):
+
+```
+bits 7:4 = Speed_Initiator → Target  (000=106k, 001=212k, 010=424k)
+bits 3:0 = Speed_Target → Initiator  (000=106k, 001=212k, 010=424k)
+```
+
+**Validation**:
+- Response must be at least 3 bytes
+- Response command code must be 0x8B
+
 ## Secondary Commands
 
 ### InListPassiveTarget (0x4A)

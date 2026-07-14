@@ -277,6 +277,72 @@ esp_err_t pn532_tg_init_as_target(pn532_handle_t h,
 }
 
 /* ========================================================================= */
+/* TgGetTargetStatus (0x8A)                                                   */
+/* ========================================================================= */
+
+#define PN532_CMD_TG_GET_TARGET_STATUS  0x8A
+#define PN532_RSP_TG_GET_TARGET_STATUS  0x8B
+
+esp_err_t pn532_tg_get_target_status(pn532_handle_t    h,
+                                     pn532_tg_status_t *out,
+                                     uint32_t           timeout_ms)
+{
+    if (h == NULL || out == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    esp_err_t err = pn532_send_command(h, PN532_CMD_TG_GET_TARGET_STATUS,
+                                       NULL, 0);
+    if (err != ESP_OK) {
+        return err;
+    }
+
+    uint8_t buf[8];
+    size_t len = 0;
+    err = pn532_receive_response(h, buf, sizeof(buf), &len, timeout_ms);
+    if (err != ESP_OK) {
+        return err;
+    }
+
+    /* Response: D5 8B State BRit */
+    if (len < 3 || buf[0] != PN532_RSP_TG_GET_TARGET_STATUS) {
+        ESP_LOGE(TAG, "TgGetTargetStatus: unexpected response "
+                 "(len=%u cmd=0x%02x raw=[%02x %02x %02x])",
+                 (unsigned)len,
+                 len > 0 ? buf[0] : 0,
+                 len > 0 ? buf[0] : 0,
+                 len > 1 ? buf[1] : 0,
+                 len > 2 ? buf[2] : 0);
+        return ESP_FAIL;
+    }
+
+    const uint8_t state = buf[1];
+    const uint8_t brit  = buf[2];
+
+    /* Warn on unknown state values but don't fail — future firmware may
+     * add new states. */
+    switch (state) {
+    case PN532_TG_STATE_IDLE:
+    case PN532_TG_STATE_ACTIVATED:
+    case PN532_TG_STATE_DESELECTED:
+    case PN532_TG_STATE_PICC_RELEASED:
+    case PN532_TG_STATE_PICC_ACTIVATED:
+    case PN532_TG_STATE_PICC_DESELECTED:
+        break;
+    default:
+        ESP_LOGW(TAG, "TgGetTargetStatus: unknown state 0x%02x", state);
+        break;
+    }
+
+    out->state = (pn532_tg_state_t)state;
+    out->br_it = brit;
+
+    ESP_LOGD(TAG, "PN532: TgGetTargetStatus state=0x%02x brit=0x%02x",
+             state, brit);
+    return ESP_OK;
+}
+
+/* ========================================================================= */
 /* TgGetData (0x86)                                                           */
 /* ========================================================================= */
 

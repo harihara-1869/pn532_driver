@@ -187,6 +187,43 @@ esp_err_t pn532_tg_init_as_target(pn532_handle_t h,
                                   uint32_t timeout_ms);
 
 /* ========================================================================= */
+/* TgGetTargetStatus (0x8A)                                                   */
+/* ========================================================================= */
+
+typedef enum {
+    PN532_TG_STATE_IDLE           = 0x00, /**< TG_IDLE / TG_RELEASED */
+    PN532_TG_STATE_ACTIVATED      = 0x01, /**< TG_ACTIVATED (DEP) */
+    PN532_TG_STATE_DESELECTED     = 0x02, /**< TG_DESELECTED (DEP) */
+    PN532_TG_STATE_PICC_RELEASED  = 0x80, /**< PICC_RELEASED (ISO14443-4) */
+    PN532_TG_STATE_PICC_ACTIVATED = 0x81, /**< PICC_ACTIVATED (ISO14443-4) */
+    PN532_TG_STATE_PICC_DESELECTED = 0x82, /**< PICC_DESELECTED (ISO14443-4) */
+} pn532_tg_state_t;
+
+typedef struct {
+    pn532_tg_state_t state;    /**< Current target state. */
+    uint8_t          br_it;    /**< Raw BRit byte (0x00 if not activated). */
+} pn532_tg_status_t;
+
+/**
+ * @brief Query the current state of the PN532 target session.
+ *
+ * Sends TgGetTargetStatus (0x8A) and returns the state and baud rate
+ * information. Valid to call at any point after TgInitAsTarget has
+ * been sent — useful for detecting reader departure (RELEASED/DESELECTED)
+ * without waiting for a TgGetData timeout.
+ *
+ * @param h       Driver handle.
+ * @param out     Receives state and BRit. Must not be NULL.
+ * @return ESP_OK on success.
+ *         ESP_ERR_INVALID_ARG if h or out is NULL.
+ *         ESP_ERR_TIMEOUT if no response within timeout_ms.
+ *         ESP_FAIL if response is malformed or unexpected command code.
+ */
+esp_err_t pn532_tg_get_target_status(pn532_handle_t    h,
+                                     pn532_tg_status_t *out,
+                                     uint32_t           timeout_ms);
+
+/* ========================================================================= */
 /* TgGetData (0x86)                                                           */
 /* ========================================================================= */
 

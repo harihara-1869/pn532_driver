@@ -194,6 +194,28 @@ Asserts hardware reset on the PN532 while holding the bus mutex to prevent I2C t
 
 **Note**: the caller is responsible for re-running SAMConfiguration after reset.
 
+### `pn532_send_ack`
+
+Sends a fixed 6-byte ACK frame from host to PN532. Used to abort a command that is currently being processed — the PN532 discontinues the operation and returns to waiting for a new command. No response is sent back by the PN532 after an abort ACK.
+
+This reuses the same `PN532_ACK_FRAME` constant that `pn532_read_ack` uses for validation:
+
+```
+0x00  0x00  0xFF  0x00  0xFF  0x00
+```
+
+**Implementation**:
+1. Validate handle is not NULL
+2. Write the 6-byte ACK frame via `tp_write()`
+3. Return immediately — no `wait_ready`, no response read
+
+**Returns**:
+- `ESP_OK` — ACK sent
+- `ESP_ERR_INVALID_ARG` — NULL handle
+- `ESP_ERR_TIMEOUT` — bus write failed
+
+**Use case**: fault recovery when the PN532 is stuck mid-command (e.g. after a timeout in TgInitAsTarget). Sending ACK puts the chip back into a known idle state.
+
 ## Frame Resync (`resync_frame`)
 
 When `pn532_parse_frame` returns `ESP_ERR_INVALID_CRC`, the core driver attempts a frame resync before giving up.

@@ -541,6 +541,19 @@ esp_err_t pn532_wakeup(pn532_handle_t h)
     return err;
 }
 
+esp_err_t pn532_send_ack(pn532_handle_t h)
+{
+    if (h == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    esp_err_t err = tp_write(h, PN532_ACK_FRAME, sizeof(PN532_ACK_FRAME));
+    if (err == ESP_OK) {
+        ESP_LOGD(TAG, "PN532: ACK sent");
+    }
+    return err;
+}
+
 esp_err_t pn532_reset(pn532_handle_t h, uint32_t pulse_ms, uint32_t settle_ms)
 {
     if (h == NULL) {

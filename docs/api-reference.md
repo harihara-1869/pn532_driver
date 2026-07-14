@@ -79,6 +79,32 @@ typedef struct {
 } pn532_tg_init_result_t;
 ```
 
+#### `pn532_tg_state_t`
+
+```c
+typedef enum {
+    PN532_TG_STATE_IDLE            = 0x00,  // TG_IDLE / TG_RELEASED
+    PN532_TG_STATE_ACTIVATED       = 0x01,  // TG_ACTIVATED (DEP)
+    PN532_TG_STATE_DESELECTED      = 0x02,  // TG_DESELECTED (DEP)
+    PN532_TG_STATE_PICC_RELEASED   = 0x80,  // PICC_RELEASED (ISO14443-4)
+    PN532_TG_STATE_PICC_ACTIVATED  = 0x81,  // PICC_ACTIVATED (ISO14443-4)
+    PN532_TG_STATE_PICC_DESELECTED = 0x82,  // PICC_DESELECTED (ISO14443-4)
+} pn532_tg_state_t;
+```
+
+#### `pn532_tg_status_t`
+
+```c
+typedef struct {
+    pn532_tg_state_t state;  // Current target state
+    uint8_t          br_it;  // Raw BRit byte (0x00 if not activated)
+} pn532_tg_status_t;
+```
+
+`br_it` encodes baud rate in both directions when `state == PN532_TG_STATE_ACTIVATED`:
+bits 7:4 = Initiator→Target speed, bits 3:0 = Target→Initiator speed
+(000=106kbps, 001=212kbps, 010=424kbps).
+
 #### `pn532_brty_t`
 
 ```c
@@ -224,6 +250,23 @@ Send data to NFC initiator. Max 262 bytes.
 | `ESP_ERR_INVALID_ARG` | NULL handle, or NULL data with non-zero len |
 | `ESP_ERR_INVALID_SIZE` | data_len > 262 |
 | `ESP_FAIL` | PN532 error status |
+
+#### `pn532_tg_get_target_status`
+
+```c
+esp_err_t pn532_tg_get_target_status(pn532_handle_t    h,
+                                     pn532_tg_status_t *out,
+                                     uint32_t           timeout_ms);
+```
+
+Query the current state of the PN532 target session. Sends TgGetTargetStatus (0x8A). Valid to call at any point after TgInitAsTarget — useful for detecting reader departure without waiting for a TgGetData timeout.
+
+| Return | Condition |
+|--------|-----------|
+| `ESP_OK` | Success |
+| `ESP_ERR_INVALID_ARG` | NULL handle or output pointer |
+| `ESP_ERR_TIMEOUT` | No response within timeout_ms |
+| `ESP_FAIL` | Malformed response or unexpected command code |
 
 #### `pn532_in_list_passive_target`
 
@@ -449,6 +492,24 @@ Assert hardware reset on the PN532. Acquires the bus mutex before asserting rese
 | `ESP_OK` | Reset asserted successfully |
 | `ESP_ERR_INVALID_ARG` | NULL handle |
 | `ESP_ERR_NOT_SUPPORTED` | Transport has no reset pin |
+
+#### `pn532_send_ack`
+
+```c
+esp_err_t pn532_send_ack(pn532_handle_t h);
+```
+
+Send a fixed 6-byte ACK frame to the PN532. Used to abort a command that is currently being processed. After sending ACK, the PN532 discontinues the current operation and returns to waiting for a new command. No response is sent back by the PN532.
+
+The ACK frame uses the same pattern as the chip-to-host ACK: `0x00 0x00 0xFF 0x00 0xFF 0x00`. This is the existing `PN532_ACK_FRAME` constant already used by the core driver for ACK validation.
+
+The function writes the frame and returns immediately — no `wait_ready`, no response read.
+
+| Return | Condition |
+|--------|-----------|
+| `ESP_OK` | ACK sent |
+| `ESP_ERR_INVALID_ARG` | NULL handle |
+| `ESP_ERR_TIMEOUT` | Bus write failed |
 
 ---
 

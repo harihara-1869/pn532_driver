@@ -46,6 +46,7 @@ pn532_driver/
 - [x] Wakeup sequence
 - [x] Hardware reset support (optional RST GPIO pin)
 - [x] I2C bus recovery (SDA stuck-low detection and SCL clock pulse recovery)
+- [x] `pn532_send_ack()` — send ACK frame to abort an in-progress command
 - [x] Command layer (`pn532_cmd.h`):
   - [x] `pn532_get_firmware_version()` — read IC, version, revision, features
   - [x] `pn532_sam_configuration()` — configure SAM mode (NORMAL, VIRTUAL_CARD, etc.)
@@ -57,6 +58,7 @@ pn532_driver/
   - [x] `pn532_tg_get_initiator_command()` — retrieve raw command from initiator
   - [x] `pn532_tg_response_to_initiator()` — send response in ISO14443-4 PICC mode
   - [x] `pn532_tg_set_meta_data()` — set meta-data for next response
+  - [x] `pn532_tg_get_target_status()` — query target session state and baud rate
 - [x] Command-layer test suite (all commands, on-target)
 
 **TODO:**

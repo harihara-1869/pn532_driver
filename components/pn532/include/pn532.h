@@ -238,6 +238,24 @@ esp_err_t pn532_receive_response(pn532_handle_t h,
 esp_err_t pn532_wakeup(pn532_handle_t h);
 
 /**
+ * @brief Send an ACK frame to the PN532.
+ *
+ * Used to abort a command that is currently being processed by the
+ * PN532. After sending ACK, the PN532 discontinues the current
+ * operation and returns to waiting for a new command. No response
+ * is sent by the PN532 after an abort ACK.
+ *
+ * This is also used after receiving a response to confirm receipt,
+ * though that step is optional per the PN532 protocol.
+ *
+ * @param h  Driver handle.
+ * @return ESP_OK on success.
+ *         ESP_ERR_INVALID_ARG if h is NULL.
+ *         ESP_ERR_TIMEOUT if the write fails (bus error).
+ */
+esp_err_t pn532_send_ack(pn532_handle_t h);
+
+/**
  * @brief Assert hardware reset on the PN532.
  *
  * Acquires the bus mutex before asserting reset and releases it after
